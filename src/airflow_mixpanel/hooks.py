@@ -46,12 +46,13 @@ class MixpanelHook(BaseHook):
         -----
         start_date: str
         Start date to start fetching the records. The expected format is YYYY-MM-DD.
+
         end_date: str
         End date to fetching records up to (inclusive). The expected format is YYYY-MM-DD.
         """
         session, url = self.get_conn()
         params = {"from_date": start_date, "to_date": end_date}
-        headers = {"Accept": "text/plain"}
+        headers = {"Accept": "application/json"}
         resp = session.get(url, headers=headers, params=params)
         resp.raise_for_status()
         content = resp.content.decode("utf8").split("\n")
