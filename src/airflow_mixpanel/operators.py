@@ -1,7 +1,7 @@
 import csv
-import json
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
+from typing import List
 
 from airflow.models.baseoperator import BaseOperator
 from airflow.providers.amazon.aws.hooks.s3 import S3Hook
@@ -20,6 +20,7 @@ class MixpanelFetchRecordsOperator(BaseOperator):
         output_path: str,
         start_date: str = "{{ds}}",
         end_date: str = "{{next_ds}}",
+        file_delimiter: str = "|",
         **kwargs,
     ):
         super(MixpanelFetchRecordsOperator, self).__init__(**kwargs)
@@ -27,6 +28,7 @@ class MixpanelFetchRecordsOperator(BaseOperator):
         self._output_path = output_path
         self._start_date = start_date
         self._end_date = end_date
+        self._file_delimiter = file_delimiter
 
     def execute(self, context):
         hook = MixpanelHook(self._conn_id)
@@ -50,7 +52,14 @@ class MixpanelFetchRecordsOperator(BaseOperator):
         output_dir.mkdir(exist_ok=True, parents=True)
 
         with open(self._output_path, "w") as file_:
-            json.dump(records, fp=file_)
+            header_names = set(
+                [key for record in records for key in record.keys()]
+            )
+            writer = csv.DictWriter(
+                file_, header_names, delimiter=self._file_delimiter
+            )
+            writer.writeheader()
+            writer.writerows(records)
 
 
 class MixpaneltoS3Operator(BaseOperator):
@@ -77,6 +86,26 @@ class MixpaneltoS3Operator(BaseOperator):
         self._dest_bucket_key = dest_bucket_key
         self._output_key_delimiter = output_key_delimiter
 
+    def _records_to_buffer(
+        self, records_list: List[dict], delimiter: str = "|"
+    ):
+        string_buffer = StringIO()
+
+        header_names = set(
+            [key for record in records_list for key in record.keys()]
+        )
+        writer = csv.DictWriter(
+            string_buffer, header_names, delimiter=delimiter
+        )
+        writer.writeheader()
+        writer.writerows(records_list)
+
+        bytes_buffer = BytesIO(string_buffer.getvalue().encode())
+        string_buffer.close()
+        bytes_buffer.seek(0)
+
+        return bytes_buffer
+
     def execute(self, context):
         mixpanel_hook = MixpanelHook(self._mixpanel_conn_id)
         s3_hook = S3Hook(self._s3_conn_id)
@@ -94,14 +123,12 @@ class MixpaneltoS3Operator(BaseOperator):
                 f"Uploading records to {self._dest_bucket_name} bucket."
             )
 
-            # bytes_stream = BytesIO()
-            json_data = json.dumps(records)
-            binary_data = json_data.encode()
-            bytes_stream = BytesIO(binary_data)
+            records_bytes_buffer = self._records_to_buffer(
+                records, delimiter=self._output_key_delimiter
+            )
 
-            bytes_stream.seek(0)
             s3_hook.load_file_obj(
-                bytes_stream,
+                records_bytes_buffer,
                 key=self._dest_bucket_key,
                 bucket_name=self._dest_bucket_name,
                 replace=True,
