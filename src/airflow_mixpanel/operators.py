@@ -135,3 +135,4 @@ class MixpaneltoS3Operator(BaseOperator):
             )
         except:
             self.log.exception("An error ocurred.")
+            raise Exception
